@@ -5,6 +5,7 @@ import seaborn as sns
 import pypfopt as pfopt
 from scipy.optimize import minimize
 from typing import List, Tuple, Dict, Any
+from matplotlib.pyplot import Axes
 
 # Constants
 START_DATE = "2014-04-16"
