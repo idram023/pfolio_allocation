@@ -244,8 +244,10 @@ def display_simulated_ef_with_random_sfr(mean_returns: np.ndarray, cov_matrix: n
     min_vol_idx = np.argmin(results[:, 0])
     sdp_min, rp_min = results[min_vol_idx, 0], results[min_vol_idx, 1]
     min_vol_allocation = portfolio_allocation(weights[min_vol_idx], mean_returns)
-    min_vol_allocation.allocation = [round(i * 100, 2) for i inmin_vol_allocation.allocation]
+    min_vol_allocation.allocation = [round(i * 100, 2) for i in min_vol_allocation.allocation]
     min_vol_allocation = min_vol_allocation.T
+
+
 
     max_sharpe_r = rp_max_sharpe_portfolio = pd.DataFrame(rp, index=["max sharpe portfolio"])
     min_vol_r = rp_min_vol_portfolio = pd.DataFrame(rp_min, index=["min vol portfolio"])
