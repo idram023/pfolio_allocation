@@ -7,12 +7,14 @@ from scipy.optimize import minimize
 from typing import List, Tuple, Dict, Any
 from matplotlib.pyplot import Axes
 import yfinance as yf
+import numexpr as ne
+
 # Constants
 START_DATE = "2014-04-16"
 END_DATE = "2024-04-16"
 RISK_FREE_RATE = 0.046280
-NUM_PORTFOLIOS = 1000000
-stock_tickers = ['AAPL', 'MSFT', 'GOOG', 'JNJ', 'NVDA', '^GSPC', 'KO', 'LVMUY', 'PXD', 'ADBE', 'AVGO', 'ORCL', 'DELL', 'BABA', 'WMT', 'CSCO', 'RIOT', 'DIS', 'WBD', 'COIN', 'PARA', 'QCOM', 'PFE', 'MMM', 'LLY', 'PYPL', 'AMD', 'ABBV', 'CVX', 'INTC', 'AMZN', 'IBM', 'F', 'T', 'BA', 'META', 'TSLA', 'AXP', 'BX', 'PG', 'NFLX', 'MS', 'UAL', 'BAC', 'GS', 'BLK', 'WFC', 'JPM', 'C', 'DAL', 'DELL']
+NUM_PORTFOLIOS = 100000
+stock_tickers = ['AAPL', 'MSFT', 'GOOG', 'JNJ', 'NVDA', '^GSPC', 'KO', 'LVMUY', 'PXD', 'ADBE', 'AVGO', 'ORCL', 'DELL', 'BABA', 'WMT', 'CSCO', 'RIOT', 'DIS', 'WBD', 'COIN', 'PARA', 'QCOM', 'PFE', 'MMM', 'LLY', 'PYPL', 'AMD', 'ABBV', 'CVX', 'INTC', 'AMZN', 'IBM', 'F', 'T', 'BA', 'META', 'TSLA', 'AXP', 'BX', 'PG', 'NFLX', 'MS', 'UAL', 'BAC', 'GS', 'BLK', 'WFC', 'JPM', 'C', 'DAL']
 
 def download_stock_prices(stock_tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
     """
@@ -75,17 +77,16 @@ def portfolio_sharpe_ratio(weights: np.ndarray, mean_returns: np.ndarray, cov_ma
 
 def max_sharpe_ratio(mean_returns: np.ndarray, cov_matrix: np.ndarray, risk_free_rate: float) -> Tuple[np.ndarray, float]:
     """
-    Finds portfolio with maximum Sharpe ratio.
+    Calculates the maximum Sharpe ratio portfolio.
     """
     num_assets = len(mean_returns)
-    args = (mean_returns, cov_matrix, risk_free_rate)
-    constraints = ({'type': 'eq', 'fun' : lambda x: np.sum(x)-1})
-    bound = (0.0, 1.0)
-    bounds = tuple(bound for asset in range(num_assets))
-    result = minimize(portfolio_volatility, num_assets * [1./num_assets,], args=args, method = 'SLSQP', bounds=bounds, constraints=constraints)
-    max_sharpe_portfolio = result.x
-    max_sharpe_ratio = portfolio_sharpe_ratio(max_sharpe_portfolio, mean_returns, cov_matrix, risk_free_rate)
-    return max_sharpe_portfolio, max_sharpe_ratio
+    initial_weights = np.ones(num_assets) / num_assets
+    constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+    bounds = tuple((0, 1) for asset in range(num_assets))
+    result = minimize(portfolio_volatility, initial_weights, args=(mean_returns, cov_matrix), method='SLSQP', bounds=bounds, constraints=constraints)
+    weights = result.x
+    sharpe_ratio = (mean_returns @ weights - risk_free_rate) / portfolio_volatility(weights, mean_returns, cov_matrix)
+    return weights, sharpe_ratio
 
 def min_variance(mean_returns: np.ndarray, cov_matrix: np.ndarray) -> Tuple[np.ndarray, float]:
     """
@@ -101,6 +102,7 @@ def min_variance(mean_returns: np.ndarray, cov_matrix: np.ndarray) -> Tuple[np.n
     min_vol_variance = np.sqrt(np.dot(min_vol_portfolio.T, np.dot(cov_matrix, min_vol_portfolio))) * np.sqrt(251)
     return min_vol_portfolio, min_vol_variance
 
+
 def random_portfolios(num_portfolios: int, mean_returns: np.ndarray, cov_matrix: np.ndarray) -> Tuple[np.ndarray, List[np.ndarray]]:
     """
     Generates random portfolios and calculates their performance.
@@ -114,17 +116,18 @@ def random_portfolios(num_portfolios: int, mean_returns: np.ndarray, cov_matrix:
         weights /= np.sum(weights)
         weights = np.clip(weights, 0, 1)
         weights = weights.reshape(num_assets,)
-        results[i,:] = portfolio_annualised_performance(weights, mean_returns, cov_matrix)
+        results[i,:] = portfolio_annualised_performance_vectorized(weights, mean_returns, cov_matrix)
         weights_record.append(weights)
     return results, weights_record
 
-def portfolio_annualised_performance(weights: np.ndarray, mean_returns: np.ndarray, cov_matrix: np.ndarray) -> Tuple[float, float]:
+def portfolio_annualised_performance_vectorized(weights: np.ndarray, mean_returns: np.ndarray, cov_matrix: np.ndarray) -> Tuple[float, float]:
     """
-    Calculates annualised performance of a portfolio.
+    Calculates the annualised performance of a portfolio using NumPy vectorized operations.
     """
-    returns = np.sum(mean_returns * weights) * 251
-    std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(251)
-    return std, returns
+    num_assets = len(mean_returns)
+    returns = np.sum(mean_returns * weights)
+    std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+    annualised_return = (1 + returns) ** 252 - 1
 
 def plot_efficient_frontier(mean_returns: np.ndarray, cov_matrix: np.ndarray, risk_free_rate: float, ax: Axes = None) -> Axes:
     """
@@ -168,25 +171,29 @@ def portfolio_allocation(weights: np.ndarray, mean_returns: np.ndarray) -> pd.Da
     """
     Calculates portfolio allocation.
     """
-    portfolio_allocation = pd.DataFrame(weights, index=stock_tickers, columns=["allocation"])
-    portfolio_allocation.allocation = [round(i * 100, 2) for i in portfolio_allocation.allocation]
-    portfolio_allocation = portfolio_allocation.T
+    weights = np.array(weights).squeeze()
+    if weights.size == len(mean_returns):
+        portfolio_allocation = pd.DataFrame(weights, index=stock_tickers, columns=["allocation"])
+        portfolio_allocation.allocation = [round(i * 100, 2) for i in portfolio_allocation.allocation]
+        portfolio_allocation = portfolio_allocation.T
+    else:
+        raise ValueError("The length of weights does not match the number of assets.")
     return portfolio_allocation
 
 def display_simulated_ef_with_random(mean_returns: np.ndarray, cov_matrix: np.ndarray, num_portfolios: int, risk_free_rate: float) -> None:
     """
     Displays simulated efficient frontier with random portfolios.
     """
-    results, weights = random_portfolios(num_portfolios, mean_returns, cov_matrix)
+    results, weights_record = random_portfolios(num_portfolios, mean_returns, cov_matrix)
     max_sharpe_idx = np.argmax(results[:, 2])
     sdp, rp = results[max_sharpe_idx, 0], results[max_sharpe_idx, 1]
-    max_sharpe_allocation = portfolio_allocation(weights[max_sharpe_idx], mean_returns)
+    max_sharpe_allocation = portfolio_allocation(weights_record[max_sharpe_idx][0], mean_returns)
     max_sharpe_allocation.allocation = [round(i * 100, 2) for i in max_sharpe_allocation.allocation]
     max_sharpe_allocation = max_sharpe_allocation.T
 
     min_vol_idx = np.argmin(results[:, 0])
     sdp_min, rp_min = results[min_vol_idx, 0], results[min_vol_idx, 1]
-    min_vol_allocation = portfolio_allocation(weights[min_vol_idx], mean_returns)
+    min_vol_allocation = portfolio_allocation(weights_record[min_vol_idx][0], mean_returns)
     min_vol_allocation.allocation = [round(i * 100, 2) for i in min_vol_allocation.allocation]
     min_vol_allocation = min_vol_allocation.T
 
@@ -435,12 +442,15 @@ def main() -> None:
     mean_returns = daily_returns.mean()
     cov_matrix = daily_returns.cov()
 
+    # Define risk-free rate
+    risk_free_rate = RISK_FREE_RATE
+
     # Generate random portfolios
     num_portfolios = NUM_PORTFOLIOS
     results, weights = random_portfolios(num_portfolios, mean_returns, cov_matrix)
 
     # Calculate maximum Sharpe ratio portfolio
-    max_sharpe_portfolio, max_sharpe_ratio = max_sharpe_ratio(mean_returns, cov_matrix, risk_free_rate)
+    max_sharpe_portfolio, max_sharpe_ratio_value = max_sharpe_ratio(mean_returns, cov_matrix, risk_free_rate)
 
     # Calculate minimum variance portfolio
     min_vol_portfolio, min_vol_variance = min_variance(mean_returns, cov_matrix)
