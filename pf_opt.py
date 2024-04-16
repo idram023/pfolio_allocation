@@ -13,6 +13,7 @@ START_DATE = "2014-04-16"
 END_DATE = "2024-04-16"
 RISK_FREE_RATE = 0.046280
 NUM_PORTFOLIOS = 1000000
+stock_tickers = ['AAPL', 'MSFT', 'GOOG', 'JNJ', 'NVDA', '^GSPC', 'KO', 'LVMUY', 'PXD', 'ADBE', 'AVGO', 'ORCL', 'DELL', 'BABA', 'WMT', 'CSCO', 'RIOT', 'DIS', 'WBD', 'COIN', 'PARA', 'QCOM', 'PFE', 'MMM', 'LLY', 'PYPL', 'AMD', 'ABBV', 'CVX', 'INTC', 'AMZN', 'IBM', 'F', 'T', 'BA', 'META', 'TSLA', 'AXP', 'BX', 'PG', 'NFLX', 'MS', 'UAL', 'BAC', 'GS', 'BLK', 'WFC', 'JPM', 'C', 'DAL', 'DELL']
 
 # Function to download stock prices
 def download_stock_prices(stock_tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
