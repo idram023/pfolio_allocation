@@ -8,6 +8,7 @@ from typing import List, Tuple, Dict, Any
 from matplotlib.pyplot import Axes
 import yfinance as yf
 import numexpr as ne
+from functools import partial
 
 # Constants
 START_DATE = "2014-04-16"
@@ -60,12 +61,16 @@ def plot_daily_returns_volatility(returns: pd.DataFrame) -> None:
         plt.ylabel("daily returns")
     except Exception as e:
         print(f"Error plotting daily returns volatility: {e}")
-
 def portfolio_volatility(weights: np.ndarray, mean_returns: np.ndarray, cov_matrix: np.ndarray) -> float:
     """
     Calculates portfolio volatility.
     """
-    return np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(251)
+    try:
+        return np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(251)
+    except ValueError:
+        return float('inf')
+    except RuntimeWarning:
+        return float('inf')
 
 def portfolio_sharpe_ratio(weights: np.ndarray, mean_returns: np.ndarray, cov_matrix: np.ndarray, risk_free_rate: float) -> float:
     """
@@ -154,15 +159,25 @@ def efficient_frontier(mean_returns: np.ndarray, cov_matrix: np.ndarray, returns
     Calculates efficient frontier for a given range of returns.
     """
     efficient_portfolios = []
+    args = (mean_returns, cov_matrix)
     for ret in returns_range:
-        args = (mean_returns, cov_matrix, ret)
         constraints = ({'type': 'eq', 'fun' : lambda x: np.sum(x)-1})
         bound = (0.0, 1.0)
         bounds = tuple(bound for asset in range(len(mean_returns)))
-        result = minimize(portfolio_volatility, len(mean_returns) * [1./len(mean_returns),], args=args, method = 'SLSQP', bounds=bounds, constraints=constraints)
+        portfolio_volatility_partial = partial(portfolio_volatility, *args)
+
+        # Add print statements to debug the function
+        print("Arguments passed to portfolio_volatility_partial:", args)
+        print("Returns range:", ret)
+
+        result = minimize(portfolio_volatility_partial, len(mean_returns) * [1./len(mean_returns),], method='SLSQP', bounds=bounds, constraints=constraints)
+
+        portfolio_volatility_value = portfolio_volatility(*result.x, *args)
+        print("Volatility calculated by portfolio_volatility:", portfolio_volatility_value)
+
         efficient_portfolios.append({
             "return": ret,
-            "volatility": portfolio_volatility(result.x, mean_returns, cov_matrix),
+            "volatility": portfolio_volatility_value,
             "allocation": portfolio_allocation(result.x, mean_returns)
         })
     return efficient_portfolios
@@ -187,18 +202,18 @@ def display_simulated_ef_with_random(mean_returns: np.ndarray, cov_matrix: np.nd
     results, weights_record = random_portfolios(num_portfolios, mean_returns, cov_matrix)
     max_sharpe_idx = np.argmax(results[:, 2])
     sdp, rp = results[max_sharpe_idx, 0], results[max_sharpe_idx, 1]
-    max_sharpe_allocation = portfolio_allocation(weights_record[max_sharpe_idx][0], mean_returns)
-    max_sharpe_allocation.allocation = [round(i * 100, 2) for i in max_sharpe_allocation.allocation]
+    max_sharpe_allocation = portfolio_allocation(weights_record[max_sharpe_idx], mean_returns)
+    max_sharpe_allocation = max_sharpe_allocation.round(2) * 100
     max_sharpe_allocation = max_sharpe_allocation.T
 
     min_vol_idx = np.argmin(results[:, 0])
     sdp_min, rp_min = results[min_vol_idx, 0], results[min_vol_idx, 1]
-    min_vol_allocation = portfolio_allocation(weights_record[min_vol_idx][0], mean_returns)
-    min_vol_allocation.allocation = [round(i * 100, 2) for i in min_vol_allocation.allocation]
+    min_vol_allocation = portfolio_allocation(weights_record[min_vol_idx], mean_returns)
+    min_vol_allocation = min_vol_allocation.round(2) * 100
     min_vol_allocation = min_vol_allocation.T
 
-    max_sharpe_r = rp_max_sharpe_portfolio = pd.DataFrame(rp, index=["max sharpe portfolio"])
-    min_vol_r = rp_min_vol_portfolio = pd.DataFrame(rp_min, index=["min vol portfolio"])
+    max_sharpe_r = rp_max_sharpe_portfolio = pd.Series(rp, index=["max sharpe portfolio"])
+    min_vol_r = rp_min_vol_portfolio = pd.Series(rp_min, index=["min vol portfolio"])
 
     fig, ax = plt.subplots(figsize=(10, 5))
     plot_efficient_frontier(mean_returns, cov_matrix, risk_free_rate, ax=ax)
@@ -367,19 +382,17 @@ def display_calculated_ef_with_random_sfr(mean_returns: np.ndarray, cov_matrix: 
     plt.show()
 
 def max_sharpe_ratio_sfr(mean_returns: np.ndarray, cov_matrix: np.ndarray, risk_free_rate: float) -> Tuple[np.ndarray, float]:
-    """
-    Finds portfolio with maximum Sharpe ratio subject to a minimum return constraint.
-    """
     num_assets = len(mean_returns)
-    args = (mean_returns, cov_matrix, risk_free_rate)
-    constraints = ({'type': 'eq', 'fun' : lambda x: np.sum(x)-1},
-                   {'type': 'ineq', 'fun' : lambda x: np.sum(mean_returns * x) - risk_free_rate})
-    bound = (0.0, 1.0)
-    bounds = tuple(bound for asset in range(num_assets))
-    result = minimize(portfolio_volatility, num_assets * [1./num_assets,], args=args, method = 'SLSQP', bounds=bounds, constraints=constraints)
-    max_sharpe_portfolio = result.x
-    max_sharpe_ratio = portfolio_sharpe_ratio(max_sharpe_portfolio, mean_returns, cov_matrix, risk_free_rate)
-    return max_sharpe_portfolio, max_sharpe_ratio
+    args = (mean_returns, cov_matrix, -1.0, np.eye(num_assets), np.ones(num_assets) / num_assets)
+    constraints = ({'type': 'eq', 'fun': lambda x: np.dot(x, x)},
+                    {'type': 'eq', 'fun': lambda x: np.dot(mean_returns, x)},
+                    {'type': 'eq', 'fun': lambda x: np.dot(cov_matrix, x[0] * x[0] * np.dot(np.diag(x[1:]), x[1:])) + risk_free_rate, 'args': (mean_returns, cov_matrix, risk_free_rate)},
+                    {'type': 'eq', 'fun': lambda x: x[0]},
+                    {'type': 'eq', 'fun': lambda x: x[1:]},
+                    {'type': 'ineq', 'fun': lambda x: x[0]},
+                    {'type': 'ineq', 'fun': lambda x: np.sum(x[1:]) - 1})
+    result = minimize(sharpe_ratio_sfr, args=args, method='SLSQP', bounds=[(0, 1), (0, 1)] * num_assets, constraints=constraints)
+    return result.x, -result.fun
 
 def min_variance_pypfopt(mean_returns: np.ndarray, cov_matrix: np.ndarray) -> Tuple[np.ndarray, float]:
     """
@@ -405,15 +418,21 @@ def efficient_frontier_pypfopt(mean_returns: np.ndarray, cov_matrix: np.ndarray,
     portfolio = pfopt.EfficientFrontier(mean_returns, cov_matrix)
     efficient_portfolios = []
     for ret in returns_range:
-        portfolio.add_objective(lambda w: -w @ mean_returns, weight_constraint='eq', weight_constraint_value=1)
-        portfolio.add_constraint(lambda w: w @ mean_returns >= ret)
-        portfolio.add_constraint(lambda w: w @ cov_matrix @ w <= 1)
-        portfolio.add_constraint(lambda w: w >= 0)
-        portfolio.minimize()
+        constraints = ({'type': 'eq', 'fun' : lambda x: np.sum(x)-1})
+        bound = (0.0, 1.0)
+        bounds = tuple(bound for asset in range(len(mean_returns)))
+        portfolio_volatility_partial = partial(portfolio_volatility, *args)
+        result = minimize(portfolio_volatility_partial, len(mean_returns) * [1./len(mean_returns),], method='SLSQP', bounds=bounds, constraints=constraints)
+
+        print("Arguments passed to portfolio_volatility_partial:", result.x)
+
+        portfolio_volatility_value = portfolio_volatility(*result.x, *args)
+        print("Volatility calculated by portfolio_volatility:", portfolio_volatility_value)
+
         efficient_portfolios.append({
-            "return": portfolio.portfolio.expected_return,
-            "volatility": portfolio.portfolio.volatility,
-            "allocation": portfolio.portfolio.weights
+            "return": ret,
+            "volatility": portfolio_volatility_value,
+            "allocation": portfolio_allocation(result.x, mean_returns)
         })
     return efficient_portfolios
 
@@ -441,6 +460,16 @@ def main() -> None:
     # Calculate mean returns and covariance matrix
     mean_returns = daily_returns.mean()
     cov_matrix = daily_returns.cov()
+
+    # Add a small positive constant to the diagonal elements
+    cov_matrix_plus_epsilon = cov_matrix + np.eye(cov_matrix.shape[0]) * 1e-8
+
+    # Compute the Cholesky decomposition of the covariance matrix
+    cholesky_decomposition = np.linalg.cholesky(cov_matrix_plus_epsilon)
+
+    # Compute the inverse of the covariance matrix using the Cholesky decomposition
+    cov_matrix_inv = np.linalg.inv(cholesky_decomposition)
+    cov_matrix_inv = cov_matrix_inv.T @ cov_matrix_inv
 
     # Define risk-free rate
     risk_free_rate = RISK_FREE_RATE
